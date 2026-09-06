@@ -1,0 +1,231 @@
+{
+  "generated_at": "2026-09-06T18-02-41Z",
+  "results": [
+    {
+      "id": "TC-01",
+      "mode": "agent",
+      "category": "real_brief",
+      "description": "BR-01 normal happy path",
+      "expected_status": "ok",
+      "actual_status": "ok",
+      "item_ids": [
+        "SOF-001",
+        "CFT-001",
+        "TVU-003",
+        "RUG-001"
+      ],
+      "rationale": "r",
+      "trade_offs": "t",
+      "message_to_customer": "m",
+      "budget_summary": {
+        "items": [
+          {
+            "item_id": "SOF-001",
+            "category": "Sofa",
+            "name": "Nordby 3-Seater Fabric Sofa",
+            "price_inr": 58000
+          },
+          {
+            "item_id": "CFT-001",
+            "category": "Coffee Table",
+            "name": "Oslo Oak Coffee Table",
+            "price_inr": 16000
+          },
+          {
+            "item_id": "TVU-003",
+            "category": "TV Unit",
+            "name": "Mid-Century Lowboard",
+            "price_inr": 27500
+          },
+          {
+            "item_id": "RUG-001",
+            "category": "Rug",
+            "name": "Berber Wool Rug 5x8",
+            "price_inr": 22000
+          }
+        ],
+        "total_spent_inr": 123500,
+        "budget_inr": 250000,
+        "remaining_inr": 126500,
+        "over_budget": false,
+        "unpriced_items": [],
+        "unknown_item_ids": []
+      },
+      "fit_summary": {
+        "fits": true,
+        "room_area_m2": 17.28,
+        "furniture_footprint_m2": 6.82,
+        "coverage_ratio": 0.395,
+        "max_coverage_allowed": 0.55,
+        "oversized_items": [],
+        "height_conflicts": [],
+        "warnings": []
+      },
+      "tools_called": [
+        "catalog_search",
+        "budget_calculator",
+        "layout_fit_check"
+      ],
+      "iterations_used": 4,
+      "deterministic_scores": [
+        {
+          "name": "catalog_validity",
+          "passed": true,
+          "detail": "unknown_item_ids=[]"
+        },
+        {
+          "name": "price_validity",
+          "passed": true,
+          "detail": "unpriced_items=[]"
+        },
+        {
+          "name": "budget_validity",
+          "passed": true,
+          "detail": "total=123500 budget=250000"
+        },
+        {
+          "name": "layout_validity",
+          "passed": true,
+          "detail": "coverage_ratio=0.395"
+        },
+        {
+          "name": "status_correctness",
+          "passed": true,
+          "detail": "expected one of ['ok'], got 'ok'"
+        },
+        {
+          "name": "no_out_of_stock",
+          "passed": true,
+          "detail": "out_of_stock_in_final_plan=[]"
+        },
+        {
+          "name": "non_ok_has_no_items",
+          "passed": true,
+          "detail": "not applicable"
+        },
+        {
+          "name": "tool_use",
+          "passed": true,
+          "detail": "required=['budget_calculator', 'catalog_search', 'layout_fit_check'] used=['budget_calculator', 'catalog_search', 'layout_fit_check'] missing=[]"
+        },
+        {
+          "name": "forbidden_categories",
+          "passed": true,
+          "detail": "not configured"
+        },
+        {
+          "name": "forbidden_name_keywords",
+          "passed": true,
+          "detail": "not configured"
+        },
+        {
+          "name": "exact_categories",
+          "passed": true,
+          "detail": "not configured"
+        },
+        {
+          "name": "must_have_categories_present",
+          "passed": true,
+          "detail": "not configured"
+        },
+        {
+          "name": "min_category_counts",
+          "passed": true,
+          "detail": "not configured"
+        },
+        {
+          "name": "must_not_include_item_id",
+          "passed": true,
+          "detail": "not configured"
+        },
+        {
+          "name": "max_price_in_category",
+          "passed": true,
+          "detail": "not configured"
+        },
+        {
+          "name": "replanning",
+          "passed": true,
+          "detail": "not configured"
+        }
+      ],
+      "case_passed": true,
+      "judge_scores": {
+        "style_coherence": 4,
+        "preference_alignment": 4,
+        "tradeoff_quality": 4,
+        "explanation_quality": 4,
+        "honest_alternatives": null,
+        "comment": "fine"
+      },
+      "api_call_count": 4,
+      "total_input_tokens": 15000,
+      "total_output_tokens": 1200,
+      "total_tokens": 16200,
+      "estimated_cost_usd": 0.042
+    }
+  ],
+  "aggregates": {
+    "catalog_validity_rate": 1.0,
+    "price_validity_rate": 1.0,
+    "budget_validity_rate": 1.0,
+    "layout_validity_rate": 1.0,
+    "safety_pass_rate": null,
+    "deterministic_infeasible_status_rate": null,
+    "overall_deterministic_pass_rate": 1.0,
+    "judge_average": 4,
+    "judge_dimension_averages": {
+      "style_coherence": 4,
+      "preference_alignment": 4,
+      "tradeoff_quality": 4,
+      "explanation_quality": 4
+    },
+    "n_agent_cases": 1,
+    "n_ok_cases": 1,
+    "n_total_cases": 1
+  },
+  "ship_gate": [
+    {
+      "metric": "catalog_validity_rate",
+      "threshold": 1.0,
+      "actual": 1.0,
+      "passed": true
+    },
+    {
+      "metric": "budget_validity_rate",
+      "threshold": 1.0,
+      "actual": 1.0,
+      "passed": true
+    },
+    {
+      "metric": "layout_validity_rate",
+      "threshold": 1.0,
+      "actual": 1.0,
+      "passed": true
+    },
+    {
+      "metric": "safety_pass_rate",
+      "threshold": 1.0,
+      "actual": null,
+      "passed": false
+    },
+    {
+      "metric": "deterministic_infeasible_status_rate",
+      "threshold": 1.0,
+      "actual": null,
+      "passed": false
+    },
+    {
+      "metric": "overall_deterministic_pass_rate",
+      "threshold": 0.9,
+      "actual": 1.0,
+      "passed": true
+    },
+    {
+      "metric": "judge_average",
+      "threshold": 4.0,
+      "actual": 4,
+      "passed": true
+    }
+  ]
+}
