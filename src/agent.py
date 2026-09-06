@@ -288,16 +288,25 @@ def _execute_tool(name: str, tool_input: dict) -> Any:
     func = TOOL_FUNCTIONS[name]
     return func(**tool_input)
 
+def run_agent(
+    brief: dict,
+    max_iterations: int = MAX_ITERATIONS,
+) -> AgentResult:
 
-def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
     client = OpenAI(
         api_key=config.AI_GATEWAY_API_KEY,
         base_url=config.AI_GATEWAY_BASE_URL,
     )
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": _brief_to_prompt(brief)},
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": _brief_to_prompt(brief),
+        },
     ]
 
     transcript = []
@@ -314,10 +323,12 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
 
         for attempt in range(EMPTY_TURN_RETRIES + 1):
 
-            # Retry the API request once if we hit a 429 rate limit.
+            # Retry API requests when a 429 rate limit occurs.
             response = None
+            MAX_RATE_LIMIT_RETRIES = 3
 
-            for rate_limit_attempt in range(2):
+            for rate_limit_attempt in range(MAX_RATE_LIMIT_RETRIES):
+
                 try:
                     api_call_count += 1
 
@@ -328,47 +339,56 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
                         messages=messages,
                     )
 
-                    # Request succeeded, so stop retrying.
+                    # Request succeeded.
                     break
 
                 except RateLimitError:
 
-                    # First 429 → wait and retry once.
-                    if rate_limit_attempt == 0:
-                        time.sleep(5)
-                        continue
+                    # Last retry failed.
+                    if (
+                        rate_limit_attempt
+                        == MAX_RATE_LIMIT_RETRIES - 1
+                    ):
+                        return AgentResult(
+                            status="rate_limited",
+                            item_ids=[],
+                            rationale="",
+                            trade_offs="",
+                            message_to_customer=(
+                                "The AI service is temporarily busy. "
+                                "Please wait a few seconds and try again."
+                            ),
+                            transcript=transcript,
+                            iterations_used=iteration,
+                            api_call_count=api_call_count,
+                            total_input_tokens=total_input_tokens,
+                            total_output_tokens=total_output_tokens,
+                            total_tokens=(
+                                total_input_tokens
+                                + total_output_tokens
+                            ),
+                            estimated_cost_usd=estimate_cost_usd(
+                                config.AGENT_MODEL,
+                                total_input_tokens,
+                                total_output_tokens,
+                            ),
+                        )
 
-                    # Second 429 → return gracefully instead of crashing
-                    # the Streamlit application.
-                    return AgentResult(
-                        status="rate_limited",
-                        item_ids=[],
-                        rationale="",
-                        trade_offs="",
-                        message_to_customer=(
-                            "The AI service is temporarily receiving too many "
-                            "requests. Please wait a few seconds and try again."
-                        ),
-                        transcript=transcript,
-                        iterations_used=iteration,
-                        api_call_count=api_call_count,
-                        total_input_tokens=total_input_tokens,
-                        total_output_tokens=total_output_tokens,
-                        total_tokens=(
-                            total_input_tokens + total_output_tokens
-                        ),
-                        estimated_cost_usd=estimate_cost_usd(
-                            config.AGENT_MODEL,
-                            total_input_tokens,
-                            total_output_tokens,
-                        ),
+                    # Exponential backoff:
+                    # First retry: 5 seconds
+                    # Second retry: 10 seconds
+                    wait_time = 5 * (
+                        2 ** rate_limit_attempt
                     )
+
+                    time.sleep(wait_time)
 
             # Track token usage from successful responses.
             if response.usage:
                 total_input_tokens += (
                     response.usage.prompt_tokens or 0
                 )
+
                 total_output_tokens += (
                     response.usage.completion_tokens or 0
                 )
@@ -385,6 +405,7 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
                 break
 
         else:
+
             return AgentResult(
                 status="agent_error",
                 item_ids=[],
@@ -400,7 +421,8 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
                 total_input_tokens=total_input_tokens,
                 total_output_tokens=total_output_tokens,
                 total_tokens=(
-                    total_input_tokens + total_output_tokens
+                    total_input_tokens
+                    + total_output_tokens
                 ),
                 estimated_cost_usd=estimate_cost_usd(
                     config.AGENT_MODEL,
@@ -410,7 +432,9 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
             )
 
         messages.append(
-            message.model_dump(exclude_none=True)
+            message.model_dump(
+                exclude_none=True
+            )
         )
 
         tool_calls = message.tool_calls or []
@@ -422,9 +446,9 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
                 {
                     "role": "user",
                     "content": (
-                        "You must call submit_plan to finish — it's the only "
-                        "way to deliver a result. Call it now with your best "
-                        "honest status."
+                        "You must call submit_plan to finish — "
+                        "it's the only way to deliver a result. "
+                        "Call it now with your best honest status."
                     ),
                 }
             )
@@ -448,6 +472,7 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
         for tool_call in tool_calls:
 
             name = tool_call.function.name
+
             tool_input = json.loads(
                 tool_call.function.arguments
             )
@@ -622,10 +647,11 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
                 {
                     "role": "user",
                     "content": (
-                        "You are approaching the step limit. On your NEXT "
-                        "response you must call submit_plan with your best "
-                        "honest status based on everything you've learned so "
-                        "far — do not call any more search or check tools."
+                        "You are approaching the step limit. "
+                        "On your NEXT response you must call "
+                        "submit_plan with your best honest status "
+                        "based on everything you've learned so far "
+                        "— do not call any more search or check tools."
                     ),
                 }
             )
