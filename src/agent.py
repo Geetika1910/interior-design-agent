@@ -290,46 +290,100 @@ def _execute_tool(name: str, tool_input: dict) -> Any:
 
 
 def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
-    client = OpenAI(api_key=config.AI_GATEWAY_API_KEY, base_url=config.AI_GATEWAY_BASE_URL)
+    client = OpenAI(
+        api_key=config.AI_GATEWAY_API_KEY,
+        base_url=config.AI_GATEWAY_BASE_URL,
+    )
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": _brief_to_prompt(brief)},
     ]
+
     transcript = []
-    # Cache of (tool_name, canonical_input) -> result, scoped to this run. If
-    # the model re-issues an identical budget_calculator/layout_fit_check
-    # call (same item_ids, same room/budget — which never change mid-run),
-    # reuse the prior result instead of re-querying, and mark it as such in
-    # the transcript. Deliberately scoped to these two tools per the fix
-    # request; catalog_search isn't deduped since varying its filters is
-    # normal exploration, not redundancy.
+
+    # Cache repeated budget/layout checks within the same run.
     dedupable_tool_cache = {}
-    # Usage bookkeeping: every chat.completions.create() call counts,
-    # including empty ones that get retried.
+
+    # API usage tracking.
     api_call_count = 0
     total_input_tokens = 0
     total_output_tokens = 0
 
     for iteration in range(1, max_iterations + 1):
+
         for attempt in range(EMPTY_TURN_RETRIES + 1):
-            response = client.chat.completions.create(
-                model=config.AGENT_MODEL,
-                max_tokens=MAX_TOKENS,
-                tools=TOOLS,
-                messages=messages,
-            )
-            api_call_count += 1
-            total_input_tokens += response.usage.prompt_tokens
-            total_output_tokens += response.usage.completion_tokens
+
+            # Retry the API request once if we hit a 429 rate limit.
+            response = None
+
+            for rate_limit_attempt in range(2):
+                try:
+                    api_call_count += 1
+
+                    response = client.chat.completions.create(
+                        model=config.AGENT_MODEL,
+                        max_tokens=MAX_TOKENS,
+                        tools=TOOLS,
+                        messages=messages,
+                    )
+
+                    # Request succeeded, so stop retrying.
+                    break
+
+                except RateLimitError:
+
+                    # First 429 → wait and retry once.
+                    if rate_limit_attempt == 0:
+                        time.sleep(5)
+                        continue
+
+                    # Second 429 → return gracefully instead of crashing
+                    # the Streamlit application.
+                    return AgentResult(
+                        status="rate_limited",
+                        item_ids=[],
+                        rationale="",
+                        trade_offs="",
+                        message_to_customer=(
+                            "The AI service is temporarily receiving too many "
+                            "requests. Please wait a few seconds and try again."
+                        ),
+                        transcript=transcript,
+                        iterations_used=iteration,
+                        api_call_count=api_call_count,
+                        total_input_tokens=total_input_tokens,
+                        total_output_tokens=total_output_tokens,
+                        total_tokens=(
+                            total_input_tokens + total_output_tokens
+                        ),
+                        estimated_cost_usd=estimate_cost_usd(
+                            config.AGENT_MODEL,
+                            total_input_tokens,
+                            total_output_tokens,
+                        ),
+                    )
+
+            # Track token usage from successful responses.
+            if response.usage:
+                total_input_tokens += (
+                    response.usage.prompt_tokens or 0
+                )
+                total_output_tokens += (
+                    response.usage.completion_tokens or 0
+                )
+
             message = response.choices[0].message
-            # A turn can occasionally come back with neither text nor a tool
-            # call (token-budget truncation or an upstream hiccup). That's a
-            # transient failure, not the model deliberately declining to act
-            # — retry a couple of times before giving up.
-            has_content = bool(message.tool_calls) or bool((message.content or "").strip())
+
+            # Check whether the model actually returned something.
+            has_content = (
+                bool(message.tool_calls)
+                or bool((message.content or "").strip())
+            )
+
             if has_content:
                 break
+
         else:
             return AgentResult(
                 status="agent_error",
@@ -337,81 +391,211 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
                 rationale="",
                 trade_offs="",
                 message_to_customer=(
-                    "The agent produced empty responses after repeated retries "
-                    "(likely truncated by the token limit)."
+                    "The agent produced an empty response. "
+                    "Please try again."
                 ),
                 transcript=transcript,
                 iterations_used=iteration,
                 api_call_count=api_call_count,
                 total_input_tokens=total_input_tokens,
                 total_output_tokens=total_output_tokens,
-                total_tokens=total_input_tokens + total_output_tokens,
-                estimated_cost_usd=estimate_cost_usd(config.AGENT_MODEL, total_input_tokens, total_output_tokens),
+                total_tokens=(
+                    total_input_tokens + total_output_tokens
+                ),
+                estimated_cost_usd=estimate_cost_usd(
+                    config.AGENT_MODEL,
+                    total_input_tokens,
+                    total_output_tokens,
+                ),
             )
 
-        messages.append(message.model_dump(exclude_none=True))
+        messages.append(
+            message.model_dump(exclude_none=True)
+        )
 
         tool_calls = message.tool_calls or []
 
+        # Model returned text but didn't call a tool.
         if not tool_calls:
-            # Model produced text but no tool call — nudge it once to use
-            # submit_plan instead of guessing at a plan from its prose.
+
             messages.append(
                 {
                     "role": "user",
                     "content": (
-                        "You must call submit_plan to finish — it's the only way to "
-                        "deliver a result. Call it now with your best honest status."
+                        "You must call submit_plan to finish — it's the only "
+                        "way to deliver a result. Call it now with your best "
+                        "honest status."
                     ),
                 }
             )
-            transcript.append({"tool": "_nudge", "input": None, "result": {"text_seen": (message.content or "")[:300]}})
+
+            transcript.append(
+                {
+                    "tool": "_nudge",
+                    "input": None,
+                    "result": {
+                        "text_seen": (
+                            message.content or ""
+                        )[:300]
+                    },
+                }
+            )
+
             continue
 
         submit_call = None
 
         for tool_call in tool_calls:
-            name = tool_call.function.name
-            tool_input = json.loads(tool_call.function.arguments)
 
+            name = tool_call.function.name
+            tool_input = json.loads(
+                tool_call.function.arguments
+            )
+
+            # Final submission.
             if name == "submit_plan":
+
                 submit_call = tool_input
-                transcript.append({"tool": "submit_plan", "input": tool_input})
-                messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": "Plan submitted."})
+
+                transcript.append(
+                    {
+                        "tool": "submit_plan",
+                        "input": tool_input,
+                    }
+                )
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": "Plan submitted.",
+                    }
+                )
+
                 continue
 
-            if name in ("budget_calculator", "layout_fit_check"):
-                cache_key = (name, json.dumps(tool_input, sort_keys=True))
+            # Cache repeated budget/layout checks.
+            if name in (
+                "budget_calculator",
+                "layout_fit_check",
+            ):
+
+                cache_key = (
+                    name,
+                    json.dumps(
+                        tool_input,
+                        sort_keys=True,
+                    ),
+                )
+
                 if cache_key in dedupable_tool_cache:
-                    result = dedupable_tool_cache[cache_key]
-                    transcript.append({"tool": name, "input": tool_input, "result": result, "cached": True})
+
+                    result = dedupable_tool_cache[
+                        cache_key
+                    ]
+
+                    transcript.append(
+                        {
+                            "tool": name,
+                            "input": tool_input,
+                            "result": result,
+                            "cached": True,
+                        }
+                    )
+
                 else:
-                    result = _execute_tool(name, tool_input)
-                    dedupable_tool_cache[cache_key] = result
-                    transcript.append({"tool": name, "input": tool_input, "result": result})
+
+                    result = _execute_tool(
+                        name,
+                        tool_input,
+                    )
+
+                    dedupable_tool_cache[
+                        cache_key
+                    ] = result
+
+                    transcript.append(
+                        {
+                            "tool": name,
+                            "input": tool_input,
+                            "result": result,
+                        }
+                    )
+
             else:
-                result = _execute_tool(name, tool_input)
-                transcript.append({"tool": name, "input": tool_input, "result": result})
 
-            messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result)})
+                result = _execute_tool(
+                    name,
+                    tool_input,
+                )
 
-        if submit_call is not None:
-            item_ids = submit_call.get("item_ids", [])
-            budget_summary = (
-                budget_calculator(item_ids, brief["budget_inr"]) if item_ids else None
+                transcript.append(
+                    {
+                        "tool": name,
+                        "input": tool_input,
+                        "result": result,
+                    }
+                )
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(result),
+                }
             )
-            fit_summary = (
-                layout_fit_check(item_ids, brief["length_cm"], brief["width_cm"], brief.get("ceiling_cm"))
+
+        # Agent submitted a final plan.
+        if submit_call is not None:
+
+            item_ids = submit_call.get(
+                "item_ids",
+                [],
+            )
+
+            budget_summary = (
+                budget_calculator(
+                    item_ids,
+                    brief["budget_inr"],
+                )
                 if item_ids
                 else None
             )
+
+            fit_summary = (
+                layout_fit_check(
+                    item_ids,
+                    brief["length_cm"],
+                    brief["width_cm"],
+                    brief.get("ceiling_cm"),
+                )
+                if item_ids
+                else None
+            )
+
             return AgentResult(
-                status=submit_call.get("status", "agent_error"),
+                status=submit_call.get(
+                    "status",
+                    "agent_error",
+                ),
                 item_ids=item_ids,
-                rationale=submit_call.get("rationale", ""),
-                trade_offs=submit_call.get("trade_offs", ""),
-                message_to_customer=submit_call.get("message_to_customer", ""),
-                items=budget_summary["items"] if budget_summary else [],
+                rationale=submit_call.get(
+                    "rationale",
+                    "",
+                ),
+                trade_offs=submit_call.get(
+                    "trade_offs",
+                    "",
+                ),
+                message_to_customer=submit_call.get(
+                    "message_to_customer",
+                    "",
+                ),
+                items=(
+                    budget_summary["items"]
+                    if budget_summary
+                    else []
+                ),
                 budget_summary=budget_summary,
                 fit_summary=fit_summary,
                 transcript=transcript,
@@ -419,35 +603,55 @@ def run_agent(brief: dict, max_iterations: int = MAX_ITERATIONS) -> AgentResult:
                 api_call_count=api_call_count,
                 total_input_tokens=total_input_tokens,
                 total_output_tokens=total_output_tokens,
-                total_tokens=total_input_tokens + total_output_tokens,
-                estimated_cost_usd=estimate_cost_usd(config.AGENT_MODEL, total_input_tokens, total_output_tokens),
+                total_tokens=(
+                    total_input_tokens
+                    + total_output_tokens
+                ),
+                estimated_cost_usd=estimate_cost_usd(
+                    config.AGENT_MODEL,
+                    total_input_tokens,
+                    total_output_tokens,
+                ),
             )
 
+        # Force the agent to finish when it is close
+        # to the iteration limit.
         if iteration >= max_iterations - 2:
+
             messages.append(
                 {
                     "role": "user",
                     "content": (
-                        "You are approaching the step limit. On your NEXT response you must "
-                        "call submit_plan with your best honest status based on everything "
-                        "you've learned so far — do not call any more search or check tools."
+                        "You are approaching the step limit. On your NEXT "
+                        "response you must call submit_plan with your best "
+                        "honest status based on everything you've learned so "
+                        "far — do not call any more search or check tools."
                     ),
                 }
             )
 
+    # Agent used all iterations without submitting.
     return AgentResult(
         status="max_iterations_exceeded",
         item_ids=[],
         rationale="",
         trade_offs="",
         message_to_customer=(
-            "The agent could not converge on a plan within the allowed number of steps."
+            "The agent could not converge on a plan within "
+            "the allowed number of steps."
         ),
         transcript=transcript,
         iterations_used=max_iterations,
         api_call_count=api_call_count,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
-        total_tokens=total_input_tokens + total_output_tokens,
-        estimated_cost_usd=estimate_cost_usd(config.AGENT_MODEL, total_input_tokens, total_output_tokens),
+        total_tokens=(
+            total_input_tokens
+            + total_output_tokens
+        ),
+        estimated_cost_usd=estimate_cost_usd(
+            config.AGENT_MODEL,
+            total_input_tokens,
+            total_output_tokens,
+        ),
     )
