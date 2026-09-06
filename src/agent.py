@@ -18,9 +18,9 @@ from openai import OpenAI
 from . import config
 from .tools import catalog_search, budget_calculator, layout_fit_check
 
-MAX_ITERATIONS = 8
-MAX_TOKENS = 8192
-EMPTY_TURN_RETRIES = 3
+MAX_ITERATIONS = 5
+MAX_TOKENS = 2048
+EMPTY_TURN_RETRIES = 1
 
 # USD per 1M tokens, (input, output). For cost estimation/debugging only —
 # not billing-accurate. Anthropic entries kept for reference in case the
