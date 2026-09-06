@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 from . import config
 from .tools import catalog_search, budget_calculator, layout_fit_check
