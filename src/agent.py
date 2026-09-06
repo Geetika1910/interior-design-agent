@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from openai import OpenAI, RateLimitError
-
+import time
 from . import config
 from .tools import catalog_search, budget_calculator, layout_fit_check
 
