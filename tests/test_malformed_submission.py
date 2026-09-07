@@ -68,6 +68,21 @@ def test_invalid_status_value_becomes_malformed_submission():
     assert result.status == "malformed_submission"
 
 
+def test_missing_status_with_populated_items_still_clears_item_ids():
+    """Regression test: a real eval run (TC-01) hit malformed_submission
+    with a fully populated item_ids list (['SOF-001', 'CFT-001', ...]) —
+    inconsistent with the rule that non-'ok' statuses carry no items."""
+    result = _run_with_mocked_submit({
+        "item_ids": ["SOF-001", "CFT-001", "TVU-003", "RUG-001"],
+        "rationale": "Real reasoning.", "trade_offs": "Real trade-offs.",
+        "message_to_customer": "Real message.",
+        # "status" deliberately omitted
+    })
+    assert result.status == "malformed_submission"
+    assert result.item_ids == []
+    assert result.rationale == "Real reasoning."  # other content still preserved
+
+
 def test_valid_status_passes_through_unchanged():
     result = _run_with_mocked_submit({
         "item_ids": [], "status": "infeasible_budget",

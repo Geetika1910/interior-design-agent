@@ -251,6 +251,12 @@ prices alone, confirm it with the tool before declaring infeasibility.
 budget_calculator or layout_fit_check still fails, stop searching for more combinations and call \
 submit_plan with the appropriate infeasible_* status and an honest explanation, rather than \
 continuing to search indefinitely.
+- Never describe a specific fix (e.g. "drop item X" or "swap item Y for Z") in your reasoning \
+without actually trying it. If you can name the adjustment that would make budget_calculator or \
+layout_fit_check pass, make that exact adjustment and re-check it before deciding on a final \
+status — do not finalize as infeasible_* while your own message proposes an untried alternative \
+that you believe would work. Only declare infeasible_* once your best identified option has \
+actually been checked and still fails, or you have no further idea left to try.
 - Do not call budget_calculator or layout_fit_check again with the exact same item_ids you just \
 checked with that tool — only re-check a tool after you've actually changed the candidate set.
 - Do not select an out-of-stock item as a normal available choice. It's fine to mention one \
@@ -674,13 +680,21 @@ def run_agent(
                 layout_ok = fit_summary is not None and fit_summary["fits"]
                 if not (budget_ok and layout_ok):
                     resolved_status = "verification_failed"
-                    item_ids = []
                     message_to_customer = (
                         "We caught an inconsistency during our final verification of this "
                         "plan — it didn't actually pass our budget/room-fit check, even "
                         "though it looked complete — so we're not delivering it as-is. This "
                         "is rare and usually resolves on a retry; please try again."
                     )
+
+            # Non-"ok" results must never carry a final item list — whether
+            # that's a legitimate infeasible_*/out_of_scope/unavailable_items
+            # status, a malformed submission that happened to include items
+            # anyway, or the verification override above. budget_summary/
+            # fit_summary (used for diagnostics/eval) already captured the
+            # original item_ids before this point.
+            if resolved_status != "ok":
+                item_ids = []
 
             return AgentResult(
                 status=resolved_status,
