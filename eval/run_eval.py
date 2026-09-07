@@ -1,4 +1,4 @@
-"""Runs the full 24-case golden set against the real agent and real API,
+"""Runs the full 25-case golden set against the real agent and real API,
 scores every case, checks the ship gate, and writes a results report.
 
 Usage: python -m eval.run_eval [--subset TC-01,TC-05,TC-23]
