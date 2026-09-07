@@ -63,4 +63,5 @@ STATUS_LABELS = {
     "agent_error": "⚠️ The agent could not complete this request",
     "max_iterations_exceeded": "⚠️ The agent could not converge on a plan",
     "malformed_submission": "⚠️ The agent's response was incomplete — please try again",
+    "verification_failed": "⚠️ The plan didn't pass our own final check — please try again",
 }

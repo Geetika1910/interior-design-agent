@@ -125,7 +125,14 @@ TOOLS = [
                 "Check whether the given item_ids physically fit the room with "
                 "sensible circulation space. Returns fits=false with specific "
                 "warnings (oversized items, height conflicts, floor coverage) "
-                "when they don't — use those warnings to decide what to swap."
+                "when they don't — use those warnings to decide what to swap. "
+                "IMPORTANT: EVERY item_id you pass counts toward the floor-coverage "
+                "total, including rugs, wall art, mirrors, and curtains — they are "
+                "only exempt from the single-item-too-big check, not from the "
+                "coverage total. Always pass your COMPLETE final item list here — "
+                "if you add or remove any item afterward, you must call this again "
+                "on the updated full list before submit_plan; a check on a smaller "
+                "subset does not cover items added later."
             ),
             "parameters": {
                 "type": "object",
@@ -611,10 +618,10 @@ def run_agent(
         # Agent submitted a final plan.
         if submit_call is not None:
 
-            item_ids = submit_call.get(
-                "item_ids",
-                [],
-            )
+            # Dedupe defensively — the model can occasionally repeat an
+            # item_id (e.g. a decor piece listed twice), which would double
+            # its footprint in the independent fit recompute below.
+            item_ids = list(dict.fromkeys(submit_call.get("item_ids", [])))
 
             # The model's tool call can, rarely, omit or mis-set the
             # required "status" field (a known LLM structured-output
@@ -648,6 +655,33 @@ def run_agent(
                 else None
             )
 
+            message_to_customer = submit_call.get("message_to_customer", "")
+
+            # Never trust a self-reported "ok" over our own independent
+            # recompute — observed in practice: the model checked layout on
+            # a smaller subset, then added more decor items afterward
+            # believing (wrongly) they were "free," and submitted 'ok'
+            # without re-checking. If the numbers we just computed disagree
+            # with the model's claim, don't ship its "here's your plan"
+            # message — say so honestly instead.
+            if resolved_status == "ok" and item_ids:
+                budget_ok = (
+                    budget_summary is not None
+                    and not budget_summary["over_budget"]
+                    and not budget_summary["unpriced_items"]
+                    and not budget_summary["unknown_item_ids"]
+                )
+                layout_ok = fit_summary is not None and fit_summary["fits"]
+                if not (budget_ok and layout_ok):
+                    resolved_status = "verification_failed"
+                    item_ids = []
+                    message_to_customer = (
+                        "We caught an inconsistency during our final verification of this "
+                        "plan — it didn't actually pass our budget/room-fit check, even "
+                        "though it looked complete — so we're not delivering it as-is. This "
+                        "is rare and usually resolves on a retry; please try again."
+                    )
+
             return AgentResult(
                 status=resolved_status,
                 item_ids=item_ids,
@@ -659,13 +693,10 @@ def run_agent(
                     "trade_offs",
                     "",
                 ),
-                message_to_customer=submit_call.get(
-                    "message_to_customer",
-                    "",
-                ),
+                message_to_customer=message_to_customer,
                 items=(
                     budget_summary["items"]
-                    if budget_summary
+                    if budget_summary and item_ids
                     else []
                 ),
                 budget_summary=budget_summary,
