@@ -26,7 +26,7 @@ from .tools import catalog_search, budget_calculator, layout_fit_check
 # was observed causing the model to wrongly conclude nothing exists at all.
 _LIVING_ROOM_CATEGORIES = ", ".join(sorted(get_living_room_categories()))
 
-MAX_ITERATIONS = 8
+MAX_ITERATIONS = 12
 MAX_TOKENS = 8192
 EMPTY_TURN_RETRIES = 3
 # The gateway/provider can 429 mid-run under a per-minute request cap, even
