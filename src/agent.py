@@ -21,6 +21,12 @@ from .tools import catalog_search, budget_calculator, layout_fit_check
 MAX_ITERATIONS = 4
 MAX_TOKENS = 1500
 EMPTY_TURN_RETRIES = 0
+# The gateway/provider can 429 mid-run under a per-minute request cap, even
+# on a funded account — observed in practice as a burst of instant (<0.3s)
+# rejections right after a run of successful calls. Retry with backoff
+# rather than letting the exception crash the whole request.
+RATE_LIMIT_RETRIES = 4
+RATE_LIMIT_BASE_DELAY_SECONDS = 3
 
 # USD per 1M tokens, (input, output). For cost estimation/debugging only —
 # not billing-accurate. Anthropic entries kept for reference in case the
@@ -288,6 +294,39 @@ def _execute_tool(name: str, tool_input: dict) -> Any:
     func = TOOL_FUNCTIONS[name]
     return func(**tool_input)
 
+
+class _RateLimitExhausted(Exception):
+    """Raised when a chat completion still 429s after all retries."""
+
+
+def _retry_after_seconds(error: RateLimitError) -> Optional[float]:
+    try:
+        value = error.response.headers.get("retry-after")
+        return float(value) if value else None
+    except Exception:
+        return None
+
+
+def _create_completion_with_retry(client: OpenAI, messages: list):
+    """Wraps client.chat.completions.create with backoff on 429s. The
+    gateway/provider can rate-limit mid-run even on a funded account — this
+    retries rather than letting the exception crash the whole request."""
+    delay = RATE_LIMIT_BASE_DELAY_SECONDS
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        try:
+            return client.chat.completions.create(
+                model=config.AGENT_MODEL,
+                max_tokens=MAX_TOKENS,
+                tools=TOOLS,
+                messages=messages,
+            )
+        except RateLimitError as e:
+            if attempt >= RATE_LIMIT_RETRIES:
+                raise _RateLimitExhausted(str(e)) from e
+            time.sleep(_retry_after_seconds(e) or delay)
+            delay *= 2
+
+
 def run_agent(
     brief: dict,
     max_iterations: int = MAX_ITERATIONS,
@@ -321,99 +360,68 @@ def run_agent(
 
     for iteration in range(1, max_iterations + 1):
 
-        for attempt in range(EMPTY_TURN_RETRIES + 1):
+        try:
+            for attempt in range(EMPTY_TURN_RETRIES + 1):
 
-            # Retry API requests when a 429 rate limit occurs.
-            response = None
-            MAX_RATE_LIMIT_RETRIES = 3
+                response = _create_completion_with_retry(client, messages)
+                api_call_count += 1
 
-            for rate_limit_attempt in range(MAX_RATE_LIMIT_RETRIES):
-
-                try:
-                    api_call_count += 1
-
-                    response = client.chat.completions.create(
-                        model=config.AGENT_MODEL,
-                        max_tokens=MAX_TOKENS,
-                        tools=TOOLS,
-                        messages=messages,
+                # Track token usage from successful responses.
+                if response.usage:
+                    total_input_tokens += (
+                        response.usage.prompt_tokens or 0
                     )
 
-                    # Request succeeded.
+                    total_output_tokens += (
+                        response.usage.completion_tokens or 0
+                    )
+
+                message = response.choices[0].message
+
+                # Check whether the model actually returned something.
+                has_content = (
+                    bool(message.tool_calls)
+                    or bool((message.content or "").strip())
+                )
+
+                if has_content:
                     break
 
-                except RateLimitError:
+            else:
 
-                    # Last retry failed.
-                    if (
-                        rate_limit_attempt
-                        == MAX_RATE_LIMIT_RETRIES - 1
-                    ):
-                        return AgentResult(
-                            status="rate_limited",
-                            item_ids=[],
-                            rationale="",
-                            trade_offs="",
-                            message_to_customer=(
-                                "The AI service is temporarily busy. "
-                                "Please wait a few seconds and try again."
-                            ),
-                            transcript=transcript,
-                            iterations_used=iteration,
-                            api_call_count=api_call_count,
-                            total_input_tokens=total_input_tokens,
-                            total_output_tokens=total_output_tokens,
-                            total_tokens=(
-                                total_input_tokens
-                                + total_output_tokens
-                            ),
-                            estimated_cost_usd=estimate_cost_usd(
-                                config.AGENT_MODEL,
-                                total_input_tokens,
-                                total_output_tokens,
-                            ),
-                        )
-
-                    # Exponential backoff:
-                    # First retry: 5 seconds
-                    # Second retry: 10 seconds
-                    wait_time = 5 * (
-                        2 ** rate_limit_attempt
-                    )
-
-                    time.sleep(wait_time)
-
-            # Track token usage from successful responses.
-            if response.usage:
-                total_input_tokens += (
-                    response.usage.prompt_tokens or 0
+                return AgentResult(
+                    status="agent_error",
+                    item_ids=[],
+                    rationale="",
+                    trade_offs="",
+                    message_to_customer=(
+                        "The agent produced an empty response. "
+                        "Please try again."
+                    ),
+                    transcript=transcript,
+                    iterations_used=iteration,
+                    api_call_count=api_call_count,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    total_tokens=(
+                        total_input_tokens
+                        + total_output_tokens
+                    ),
+                    estimated_cost_usd=estimate_cost_usd(
+                        config.AGENT_MODEL,
+                        total_input_tokens,
+                        total_output_tokens,
+                    ),
                 )
-
-                total_output_tokens += (
-                    response.usage.completion_tokens or 0
-                )
-
-            message = response.choices[0].message
-
-            # Check whether the model actually returned something.
-            has_content = (
-                bool(message.tool_calls)
-                or bool((message.content or "").strip())
-            )
-
-            if has_content:
-                break
-
-        else:
-
+        except _RateLimitExhausted:
             return AgentResult(
-                status="agent_error",
+                status="rate_limited",
                 item_ids=[],
                 rationale="",
                 trade_offs="",
                 message_to_customer=(
-                    "The agent produced an empty response. "
-                    "Please try again."
+                    "The AI service is temporarily busy. "
+                    "Please wait a few seconds and try again."
                 ),
                 transcript=transcript,
                 iterations_used=iteration,
