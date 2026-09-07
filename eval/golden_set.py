@@ -1,4 +1,4 @@
-"""The 24-case golden set.
+"""The 25-case golden set.
 
 Cases A (TC-01..TC-08) reference the real Living Room briefs already in the
 database by brief_id — resolved at load time, never hand-copied, so they
