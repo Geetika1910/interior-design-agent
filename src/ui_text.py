@@ -62,4 +62,5 @@ STATUS_LABELS = {
     "unavailable_items": "🚫 Requested items aren't in our catalog",
     "agent_error": "⚠️ The agent could not complete this request",
     "max_iterations_exceeded": "⚠️ The agent could not converge on a plan",
+    "malformed_submission": "⚠️ The agent's response was incomplete — please try again",
 }

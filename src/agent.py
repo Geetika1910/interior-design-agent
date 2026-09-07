@@ -208,6 +208,13 @@ TOOL_FUNCTIONS = {
     "layout_fit_check": layout_fit_check,
 }
 
+# The valid submit_plan statuses, read from the tool schema itself (single
+# source of truth) rather than duplicated as a literal list here.
+_VALID_SUBMIT_STATUSES = set(
+    next(t for t in TOOLS if t["function"]["name"] == "submit_plan")
+    ["function"]["parameters"]["properties"]["status"]["enum"]
+)
+
 SYSTEM_PROMPT = """You are the Interior Company design agent for Living Rooms. You turn a \
 customer's room brief into a real, budget-fitting design plan using ONLY the tools provided.
 
@@ -609,6 +616,18 @@ def run_agent(
                 [],
             )
 
+            # The model's tool call can, rarely, omit or mis-set the
+            # required "status" field (a known LLM structured-output
+            # reliability gap, not something we can control from our side).
+            # Previously this silently fell back to "agent_error" even when
+            # the model's rationale/message_to_customer were complete and
+            # correct — masking a good answer as a crash. Surface it as its
+            # own distinct, diagnosable status instead.
+            raw_status = submit_call.get("status")
+            resolved_status = (
+                raw_status if raw_status in _VALID_SUBMIT_STATUSES else "malformed_submission"
+            )
+
             budget_summary = (
                 budget_calculator(
                     item_ids,
@@ -630,10 +649,7 @@ def run_agent(
             )
 
             return AgentResult(
-                status=submit_call.get(
-                    "status",
-                    "agent_error",
-                ),
+                status=resolved_status,
                 item_ids=item_ids,
                 rationale=submit_call.get(
                     "rationale",
