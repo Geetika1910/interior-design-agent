@@ -16,11 +16,19 @@ from typing import Any, Optional
 from openai import OpenAI, RateLimitError
 import time
 from . import config
+from .catalog_meta import get_living_room_categories
 from .tools import catalog_search, budget_calculator, layout_fit_check
 
-MAX_ITERATIONS = 4
-MAX_TOKENS = 1500
-EMPTY_TURN_RETRIES = 0
+# Real category values from the catalog, so the model never has to guess a
+# conceptual term (e.g. "Lighting") that isn't an actual category — the
+# catalog splits that into "Floor Lamp" / "Pendant Light" / "Table Lamp",
+# and a search for the made-up umbrella term returns zero results, which
+# was observed causing the model to wrongly conclude nothing exists at all.
+_LIVING_ROOM_CATEGORIES = ", ".join(sorted(get_living_room_categories()))
+
+MAX_ITERATIONS = 8
+MAX_TOKENS = 8192
+EMPTY_TURN_RETRIES = 3
 # The gateway/provider can 429 mid-run under a per-minute request cap, even
 # on a funded account — observed in practice as a burst of instant (<0.3s)
 # rejections right after a run of successful calls. Retry with backoff
@@ -72,7 +80,14 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "category": {"type": "string", "description": "Exact category, e.g. 'Sofa', 'Coffee Table', 'Rug'."},
+                    "category": {
+                        "type": "string",
+                        "description": (
+                            f"Exact category from the catalog. Valid categories: {_LIVING_ROOM_CATEGORIES}. "
+                            "There is no generic 'Lighting' category — search 'Floor Lamp', 'Pendant Light', "
+                            "or 'Table Lamp' specifically for lighting must-haves."
+                        ),
+                    },
                     "style": {"type": "string", "description": "Style tag substring, e.g. 'Scandinavian'."},
                     "room_type": {"type": "string", "description": "e.g. 'Living Room'."},
                     "max_price": {"type": "integer", "description": "Maximum price in INR."},
@@ -240,6 +255,14 @@ plan for it, and tell the customer to consult a qualified professional.
 - If the customer names a specific designer/branded piece not in the catalog, never claim to \
 source it. Either offer a similar in-catalog alternative and say so plainly, or use status \
 'unavailable_items' if nothing suitable exists.
+- If one must-have category turns up no results, do NOT immediately give up on the whole plan. \
+First re-check with a broader search (drop the style filter, try a different but related \
+category name) before concluding the category truly doesn't exist. If it genuinely doesn't \
+exist, still call budget_calculator and layout_fit_check on the items you DO have before \
+choosing a final status — you cannot know whether a partial plan is worth proposing as 'ok' \
+(with the gap disclosed in trade_offs), or genuinely 'unavailable_items', without checking. \
+Never declare 'unavailable_items' or 'infeasible_layout' based only on catalog_search results — \
+verify with the budget/layout tools first, same as you would for an 'ok' plan.
 - Never promise a guaranteed delivery date or a final negotiated price — only lead times and \
 list prices as returned by the tools.
 - Keep rationale and trade_offs concise and specific to the actual items chosen, not generic.
