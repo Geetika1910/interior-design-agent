@@ -252,11 +252,16 @@ budget_calculator or layout_fit_check still fails, stop searching for more combi
 submit_plan with the appropriate infeasible_* status and an honest explanation, rather than \
 continuing to search indefinitely.
 - Never describe a specific fix (e.g. "drop item X" or "swap item Y for Z") in your reasoning \
-without actually trying it. If you can name the adjustment that would make budget_calculator or \
+without actually trying it. If you can name an adjustment that would make budget_calculator or \
 layout_fit_check pass, make that exact adjustment and re-check it before deciding on a final \
 status — do not finalize as infeasible_* while your own message proposes an untried alternative \
-that you believe would work. Only declare infeasible_* once your best identified option has \
-actually been checked and still fails, or you have no further idea left to try.
+that you believe would work. This applies to EVERY alternative you name, not just the first one \
+you try: if your first adjustment (e.g. trimming quantity/decor) still narrowly fails, and you \
+then think of a second, different kind of adjustment (e.g. swapping the oversized/expensive \
+piece itself for a smaller/cheaper one) that you believe would clear it, test that one too \
+before finalizing — do not stop at one failed retry and switch to describing further options \
+instead of trying your next-best one. Only declare infeasible_* once every option you can \
+actually think of has been tested and failed.
 - Do not call budget_calculator or layout_fit_check again with the exact same item_ids you just \
 checked with that tool — only re-check a tool after you've actually changed the candidate set.
 - Do not select an out-of-stock item as a normal available choice. It's fine to mention one \
